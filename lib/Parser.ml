@@ -1,123 +1,96 @@
-(** this module defines the file syntax, and parses it
+(** defines a monadic parser combinator system for use with {!in_channel} s *)
 
-    chEVALier is a lisp-like language
-
-    grammar: symbol ::= ascii word with no whitespace, and cannot contain "(",
-    ")", "[", "]", "#" or ";", which are the reserved terminal characters
-
-    separator ::= any ascii whitespace character
-
-    prefix ::= [ <symbol> ]
-
-    bool ::= | <prefix> "#t" | <prefix> "#f"
-
-    char ::= <prefix> "#" "'" any utf8 encoded character "'"
-
-    string ::= <prefix> """ any utf8 encoded text """
-
-    expression ::= | [ <symbol> "#" ]<symbol> | <bool> | <char> | <string> |
-    <round-expression> | <square-expression>
-
-    expression-body ::= [ <expression> { <separator> <expression> }* ]
-
-    round-expression ::= <prefix> "(" <expression-body> ")" square-expression
-    ::= <prefix> "[" <expression-body> "]"
-
-    in addition to the above grammar, ";" converts the rest of the line into a
-    comment, which is ignored by the parser
-
-    TODO: need to add specifications for escape sequences and numbers *)
-
-type brackets = Round | Square
-
-type prefix_expression =
-  | Prefixed of string * expression
-  | Expression of expression
-
-and expression =
-  | Sym of string
-  | Bool of bool
-  | Char of Uchar.t
-  | String of string
-  | Expr of brackets * prefix_expression list
-
-type 'a parse_result = Ok of 'a | Error
+type 'a parse_result = 'a option
 type 'a parser = in_channel -> 'a parse_result
 
 (** monadic flatmap *)
 let ( let* ) (a : 'a parser) (f : 'a -> 'b parser) : 'b parser =
- fun channel -> match a channel with Ok a -> f a channel | _ -> Error
+ fun channel -> Option.bind (a channel) (fun a -> f a channel)
 
-let ( let*$ ) (a, channel) (f : 'a -> 'b parser) : 'b parse_result =
-  match a channel with Ok a -> f a channel | _ -> Error
+(** optional monadic flatmap *)
+let ( let*? ) (a : 'a parser) (f : 'a option -> 'b parser) : 'b parser =
+ fun channel ->
+  let pos = LargeFile.pos_in channel in
+  let a = a channel in
+  if Option.is_none a then LargeFile.seek_in channel pos;
+  f a channel
 
 (** monadic map *)
 let ( let+ ) (a : 'a parser) (f : 'a -> 'b) : 'b parser =
- fun channel -> match a channel with Ok a -> Ok (f a) | _ -> Error
+ fun channel -> Option.map f @@ a channel
 
-let ( let+$ ) (a, channel) (f : 'a -> 'b) : 'b parse_result =
-  match a channel with Ok a -> Ok (f a) | _ -> Error
+(** optional monadic map *)
+let ( let+? ) (a : 'a parser) (f : 'a option -> 'b) : 'b parser =
+ fun channel ->
+  let pos = LargeFile.pos_in channel in
+  let a = a channel in
+  if Option.is_none a then LargeFile.seek_in channel pos;
+  Some (f a)
 
-let ok a : 'a parser = fun channel -> Ok a
+let return a : 'a parser = fun channel -> Some a
 
-(** try first *)
+(** tries each in order *)
 let first (parsers : 'a parser list) : 'a parser =
  fun channel ->
   let pos = LargeFile.pos_in channel in
   let rec first' parsers =
     match parsers with
-    | [] -> Error
+    | [] -> None
     | parser :: [] -> parser channel
     | parser :: parsers -> (
         match parser channel with
-        | Error ->
+        | None ->
             LargeFile.seek_in channel pos;
             first' parsers
         | ok -> ok)
   in
   first' parsers
 
-let rec p_rec (p : 'a parser -> 'a parser) = fun channel -> p (p_rec p) channel
+(** left fold recursive combinator *)
+let rec foldl (f : 'b -> 'a -> 'a) (init : 'a) (p : 'b parser) : 'a parser =
+  let*? x = p in
+  match x with Some x -> foldl f (f x init) p | None -> return init
 
-let cond_char cond : char parser =
+(** right fold recursive combinator *)
+let rec foldr (f : 'b -> 'a -> 'a) (init : 'a parser) (p : 'b parser) :
+    'a parser =
+  let*? x = p in
+  match x with
+  | Some x ->
+      let+ tail = foldr f init p in
+      f x tail
+  | None -> init
+
+(** accumulates a sequence of parsings *)
+let greedy p = foldr Seq.cons (return Seq.empty) p
+
+(** as greedy but doesn't store anything *)
+let consume p = foldl (fun _ _ -> ()) () p
+
+(** match a single character filtered by predicate [cond] *)
+let char_cond cond : char parser =
  fun channel ->
   try
     let char = input_char channel in
-    if cond char then Ok char else Error
-  with End_of_file -> Error
+    if cond char then Some char else None
+  with End_of_file -> None
 
-let any_char : char parser =
- fun channel -> try Ok (input_char channel) with End_of_file -> Error
+(** match any single character *)
+let char_any : char parser =
+ fun channel -> try Some (input_char channel) with End_of_file -> None
 
-let p_char char : char parser =
+(** match a single specified character *)
+let char_one char : unit parser =
  fun channel ->
   try
     let char' = input_char channel in
-    if char == char' then Ok char else Error
-  with End_of_file -> Error
+    if char == char' then Some () else None
+  with End_of_file -> None
 
-(* matches a single symbol character *)
-let sym_char =
-  cond_char (fun char ->
-      (* round expressions *)
-      char != '(' && char != ')'
-      (* square expressions *)
-      && char != '['
-      && char != ']'
-      (* prefix separator and comment *)
-      && char != '#'
-      && char != ';'
-      (* whitespace *)
-      && (not @@ Char.Ascii.is_white char))
-
-let sym =
-  let sym' sym' =
-    let* char = sym_char in
-    let+ sym = first [ sym'; ok Seq.empty ] in
-    Seq.cons char sym
-  in
-  (* at least one char *)
-  let* char = sym_char in
-  (* recursive p match *)
-  let+ sym = p_rec sym' in
-  Sym (String.of_seq @@ Seq.cons char sym)
+(** match the end of input *)
+let eof =
+ fun channel ->
+  try
+    let _ = input_char channel in
+    None
+  with End_of_file -> Some ()
