@@ -51,8 +51,10 @@ and expression =
   | String of string
   | Expr of brackets * expression list
 
-module Grammar (Input : Parser.Input) = struct
-  open Parser.Parser (Input)
+module Make (Input : Parser.Input) = struct
+  open Parser.Make (Input)
+
+  type 'a parser = 'a t
 
   let sym_common =
     (* matches a single symbol character *)
@@ -84,37 +86,45 @@ module Grammar (Input : Parser.Input) = struct
     Sym sym
 
   let separator =
-    let char = char Char.Ascii.is_white in
-    (* at least one char *)
-    let* _ = char in
-    (* once one, consume as many as possible *)
-    consume char
+    let comment =
+      (* comment character *)
+      let* _ = char @@ ( == ) ';' in
+      (* consume line *)
+      consume @@ char @@ ( != ) '\n'
+    in
+    let whitespace =
+      let+ _ = char Char.Ascii.is_white in
+      ()
+    in
+    (* must be at least one comment or whitespace *)
+    let* _ = comment or whitespace in
+    consume @@ (comment or whitespace)
 
   let escaped_char =
-    let* _ = char (( == ) '\\') in
+    let* _ = char @@ ( == ) '\\' in
     (* TODO: actually handle escapes *)
     char (fun _ -> true)
 
   let string =
-    let* _ = char (( == ) '"') in
-    let* string = greedy (escaped_char or char (( != ) '"')) in
-    let+ _ = char (( == ) '"') in
+    let* _ = char @@ ( == ) '"' in
+    let* string = greedy (escaped_char or (char @@ ( != ) '"')) in
+    let+ _ = char @@ ( == ) '"' in
     String (String.of_seq string)
 
   (* tries to collect as many prefixes as possible, then parse an expression *)
   let prefixed (exprk : expression parser) =
     let sym_hash =
       let* sym = sym_common in
-      let+ _ = char (( == ) '#') in
+      let+ _ = char @@ ( == ) '#' in
       sym
     in
-    foldr (fun sym expr -> Prefix (sym, expr)) exprk sym_hash
+    fold_right (fun sym expr -> Prefix (sym, expr)) exprk sym_hash
 
-  let rec expression channel =
+  let rec expression input =
     (prefixed @@ first [ sym; string; round_expression; square_expression ])
-      channel
+      input
 
-  and expression_body channel =
+  and expression_body input =
     (let expr =
        let* () = separator in
        expression
@@ -123,26 +133,32 @@ module Grammar (Input : Parser.Input) = struct
      let* exprs = greedy expr in
      let+? _ = separator in
      exprs)
-      channel
+      input
 
-  and round_expression channel =
-    (let* _ = char (( == ) '(') in
+  and round_expression input =
+    (let* _ = char @@ ( == ) '(' in
      let* exprs = expression_body in
-     let+ _ = char (( == ) ')') in
+     let+ _ = char @@ ( == ) ')' in
      Expr (Round, List.of_seq exprs))
-      channel
+      input
 
-  and square_expression channel =
-    (let* _ = char (( == ) '[') in
+  and square_expression input =
+    (let* _ = char @@ ( == ) '[' in
      let* exprs = expression_body in
-     let+ _ = char (( == ) ']') in
+     let+ _ = char @@ ( == ) ']' in
      Expr (Square, List.of_seq exprs))
-      channel
+      input
 
-  let entry =
+  let parse =
     let* () = separator in
-    let* expression in
+    let* exprs =
+      greedy
+      @@
+      let* expression in
+      let+ () = separator in
+      expression
+    in
     let* () = separator in
     let+ () = eof in
-    expression
+    List.of_seq exprs
 end
