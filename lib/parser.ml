@@ -122,6 +122,10 @@ module File = struct
     with Mismatch ->
       LargeFile.seek_in input pos;
       b input
+
+  let open_input path : t = In_channel.open_bin path
+  let close_input t = In_channel.close t
+  let with_input path f = In_channel.with_open_bin path f
 end
 
 module String = struct
