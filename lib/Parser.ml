@@ -1,96 +1,125 @@
 (** defines a monadic parser combinator system for use with {!in_channel} s *)
 
-type 'a parse_result = 'a option
-type 'a parser = in_channel -> 'a parse_result
+module type Input = sig
+  type t
+  type position
 
-(** monadic flatmap *)
-let ( let* ) (a : 'a parser) (f : 'a -> 'b parser) : 'b parser =
- fun channel -> Option.bind (a channel) (fun a -> f a channel)
+  exception Mismatch
 
-(** optional monadic flatmap *)
-let ( let*? ) (a : 'a parser) (f : 'a option -> 'b parser) : 'b parser =
- fun channel ->
-  let pos = LargeFile.pos_in channel in
-  let a = a channel in
-  if Option.is_none a then LargeFile.seek_in channel pos;
-  f a channel
+  val ( or ) : (t -> 'a) -> (t -> 'a) -> t -> 'a
+  val next : t -> (t * char) option
+  val position : t -> position
+end
 
-(** monadic map *)
-let ( let+ ) (a : 'a parser) (f : 'a -> 'b) : 'b parser =
- fun channel -> Option.map f @@ a channel
+module FileInput : Input = struct
+  type t = in_channel
+  type position = int64
 
-(** optional monadic map *)
-let ( let+? ) (a : 'a parser) (f : 'a option -> 'b) : 'b parser =
- fun channel ->
-  let pos = LargeFile.pos_in channel in
-  let a = a channel in
-  if Option.is_none a then LargeFile.seek_in channel pos;
-  Some (f a)
+  exception Mismatch
 
-let return a : 'a parser = fun channel -> Some a
+  let next channel =
+    try Some (channel, input_char channel) with End_of_file -> None
 
-(** tries each in order *)
-let first (parsers : 'a parser list) : 'a parser =
- fun channel ->
-  let pos = LargeFile.pos_in channel in
-  let rec first' parsers =
-    match parsers with
-    | [] -> None
-    | parser :: [] -> parser channel
-    | parser :: parsers -> (
-        match parser channel with
-        | None ->
-            LargeFile.seek_in channel pos;
-            first' parsers
-        | ok -> ok)
-  in
-  first' parsers
+  let position channel = LargeFile.pos_in channel
 
-(** left fold recursive combinator *)
-let rec foldl (f : 'b -> 'a -> 'a) (init : 'a) (p : 'b parser) : 'a parser =
-  let*? x = p in
-  match x with Some x -> foldl f (f x init) p | None -> return init
+  let ( or ) a b =
+   fun input ->
+    let pos = position input in
+    try a input
+    with Mismatch ->
+      LargeFile.seek_in input pos;
+      b input
 
-(** right fold recursive combinator *)
-let rec foldr (f : 'b -> 'a -> 'a) (init : 'a parser) (p : 'b parser) :
-    'a parser =
-  let*? x = p in
-  match x with
-  | Some x ->
-      let+ tail = foldr f init p in
-      f x tail
-  | None -> init
+  let parse file parser = In_channel.with_open_bin file parser
+end
 
-(** accumulates a sequence of parsings *)
-let greedy p = foldr Seq.cons (return Seq.empty) p
+module StringInput : Input = struct
+  type position = int
+  type t = position * string
 
-(** as greedy but doesn't store anything *)
-let consume p = foldl (fun _ _ -> ()) () p
+  exception Mismatch
 
-(** match a single character filtered by predicate [cond] *)
-let char_cond cond : char parser =
- fun channel ->
-  try
-    let char = input_char channel in
-    if cond char then Some char else None
-  with End_of_file -> None
+  let next ((pos, str) : t) : (t * char) option =
+    if pos < String.length str then Some ((pos + 1, str), String.get str pos)
+    else None
 
-(** match any single character *)
-let char_any : char parser =
- fun channel -> try Some (input_char channel) with End_of_file -> None
+  let position (pos, _) = pos
 
-(** match a single specified character *)
-let char_one char : unit parser =
- fun channel ->
-  try
-    let char' = input_char channel in
-    if char == char' then Some () else None
-  with End_of_file -> None
+  let ( or ) a b = fun input -> try a input with Mismatch -> b input
+end
 
-(** match the end of input *)
-let eof =
- fun channel ->
-  try
-    let _ = input_char channel in
-    None
-  with End_of_file -> Some ()
+module Parser (Input : Input) = struct
+  type 'a parser = Input.t -> Input.t * 'a
+
+  (** monadic lift *)
+  let return a : 'a parser = fun input -> (input, a)
+
+  (** failure *)
+  let fail (_ : Input.t) : Input.t * 'a = raise Input.Mismatch
+
+  (** or *)
+  let ( or ) (a : 'a parser) (b : 'a parser) : 'a parser = Input.(a or b)
+
+  (** monadic flatmap *)
+  let ( let* ) (a : 'a parser) (f : 'a -> 'b parser) : 'b parser =
+   fun input ->
+    let input, a = a input in
+    f a input
+
+  (** optional monadic flatmap *)
+  let ( let*? ) (a : 'a parser) (f : 'a option -> 'b parser) : 'b parser =
+    (let* a in
+     f @@ Some a)
+    or f None
+
+  (** monadic map *)
+  let ( let+ ) (a : 'a parser) (f : 'a -> 'b) : 'b parser =
+   fun input ->
+    let input, a = a input in
+    (input, f a)
+
+  (** optional monadic map *)
+  let ( let+? ) (a : 'a parser) (f : 'a option -> 'b) : 'b parser =
+    (let+ a in
+     f @@ Some a)
+    or fun input -> (input, f None)
+
+  (** tries each in order *)
+  let first (parsers : 'a parser list) : 'a parser =
+    List.fold_left (fun tail head -> head or tail) fail parsers
+
+  (** left fold recursive combinator *)
+  let rec foldl (f : 'b -> 'a -> 'a) (init : 'a) (p : 'b parser) : 'a parser =
+    let*? x = p in
+    match x with Some x -> foldl f (f x init) p | None -> return init
+
+  (** right fold recursive combinator *)
+  let rec foldr (f : 'b -> 'a -> 'a) (init : 'a parser) (p : 'b parser) :
+      'a parser =
+    let*? x = p in
+    match x with
+    | Some x ->
+        let+ tail = foldr f init p in
+        f x tail
+    | None -> init
+
+  (** accumulates a sequence of parsings *)
+  let greedy p = foldr Seq.cons (return Seq.empty) p
+
+  (** as greedy but doesn't store anything *)
+  let consume p = foldl (fun _ _ -> ()) () p
+
+  (** match a character by predicate *)
+  let char (pred : char -> bool) =
+   fun input ->
+    match Input.next input with
+    | Some (input, c) when pred c -> (input, c)
+    | _ -> raise Input.Mismatch
+
+  (** match the end of input *)
+  let eof =
+   fun input ->
+    match Input.next input with
+    | None -> (input, ())
+    | _ -> raise Input.Mismatch
+end

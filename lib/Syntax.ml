@@ -51,98 +51,98 @@ and expression =
   | String of string
   | Expr of brackets * expression list
 
-open Parser
+module Grammar (Input : Parser.Input) = struct
+  open Parser.Parser (Input)
 
-let sym_common =
-  (* matches a single symbol character *)
-  let char =
-    char_cond (fun char ->
-        (* string *)
-        char != '"'
-        (* round expressions *)
-        && char != '('
-        && char != ')'
-        (* square expressions *)
-        && char != '['
-        && char != ']'
-        (* prefix separator and comment *)
-        && char != '#'
-        && char != ';'
-        (* whitespace *)
-        && (not @@ Char.Ascii.is_white char))
-  in
-  (* at least one char *)
-  let* x = char in
-  (* once one, collect as many as possible *)
-  let+ xs = greedy char in
-  (* collate them into a String *)
-  String.of_seq @@ Seq.cons x xs
+  let sym_common =
+    (* matches a single symbol character *)
+    let char =
+      char (fun char ->
+          (* string *)
+          char != '"'
+          (* round expressions *)
+          && char != '('
+          && char != ')'
+          (* square expressions *)
+          && char != '['
+          && char != ']'
+          (* prefix separator and comment *)
+          && char != '#'
+          && char != ';'
+          (* whitespace *)
+          && (not @@ Char.Ascii.is_white char))
+    in
+    (* at least one char *)
+    let* x = char in
+    (* once one, collect as many as possible *)
+    let+ xs = greedy char in
+    (* collate them into a String *)
+    String.of_seq @@ Seq.cons x xs
 
-let sym =
-  let+ sym = sym_common in
-  Sym sym
+  let sym =
+    let+ sym = sym_common in
+    Sym sym
 
-let separator =
-  let char = char_cond Char.Ascii.is_white in
-  (* at least one char *)
-  let* _ = char in
-  (* once one, consume as many as possible *)
-  consume char
+  let separator =
+    let char = char Char.Ascii.is_white in
+    (* at least one char *)
+    let* _ = char in
+    (* once one, consume as many as possible *)
+    consume char
 
-let escaped_char =
-  let* () = char_one '\\' in
-  (* TODO: actually handle escapes *)
-  char_any
+  let escaped_char =
+    let* _ = char (( == ) '\\') in
+    (* TODO: actually handle escapes *)
+    char (fun _ -> true)
 
-let string =
-  let char = first [ escaped_char; char_cond (fun char -> char != '"') ] in
-  let* () = char_one '"' in
-  let* string = greedy char in
-  let+ () = char_one '"' in
-  String (String.of_seq string)
+  let string =
+    let* _ = char (( == ) '"') in
+    let* string = greedy (escaped_char or char (( != ) '"')) in
+    let+ _ = char (( == ) '"') in
+    String (String.of_seq string)
 
-(* tries to collect as many prefixes as possible *)
-let prefixed (exprk : expression parser) =
-  let sym_hash =
-    let* sym = sym_common in
-    let+ () = char_one '#' in
-    sym
-  in
-  foldr (fun sym expr -> Prefix (sym, expr)) exprk sym_hash
+  (* tries to collect as many prefixes as possible, then parse an expression *)
+  let prefixed (exprk : expression parser) =
+    let sym_hash =
+      let* sym = sym_common in
+      let+ _ = char (( == ) '#') in
+      sym
+    in
+    foldr (fun sym expr -> Prefix (sym, expr)) exprk sym_hash
 
-let rec expression channel =
-  (prefixed @@ first [ sym; string; round_expression; square_expression ])
-    channel
+  let rec expression channel =
+    (prefixed @@ first [ sym; string; round_expression; square_expression ])
+      channel
 
-and expression_body channel =
-  (let expr =
-     let* () = separator in
-     expression
-   in
-   let*? _ = separator in
-   let* exprs = greedy expr in
-   let+? _ = separator in
-   exprs)
-    channel
+  and expression_body channel =
+    (let expr =
+       let* () = separator in
+       expression
+     in
+     let*? _ = separator in
+     let* exprs = greedy expr in
+     let+? _ = separator in
+     exprs)
+      channel
 
-and round_expression channel =
-  (let* () = char_one '(' in
-   let* exprs = expression_body in
-   let+ () = char_one ')' in
-   Expr (Round, List.of_seq exprs))
-    channel
+  and round_expression channel =
+    (let* _ = char (( == ) '(') in
+     let* exprs = expression_body in
+     let+ _ = char (( == ) ')') in
+     Expr (Round, List.of_seq exprs))
+      channel
 
-and square_expression channel =
-  (let* () = char_one '[' in
-   let* exprs = expression_body in
-   let+ () = char_one ']' in
-   Expr (Square, List.of_seq exprs))
-    channel
+  and square_expression channel =
+    (let* _ = char (( == ) '[') in
+     let* exprs = expression_body in
+     let+ _ = char (( == ) ']') in
+     Expr (Square, List.of_seq exprs))
+      channel
 
-let file =
-  let* () = separator in
-  let* expression in
-  let* () = separator in
-  let+ () = eof in
-  expression
-
+  let entry =
+    let* () = separator in
+    let* expression in
+    let* () = separator in
+    let+ () = eof in
+    expression
+end
