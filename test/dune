@@ -1,4 +1,6 @@
 (tests
- (names test_simple_strings test_simple_file)
- (deps simple.EVAL)
+ (names test_simple_strings test_simple_files)
+ (deps
+   simple.EVAL
+   simple-long.EVAL)
  (libraries chEVALier))

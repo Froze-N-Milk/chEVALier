@@ -1,0 +1,6 @@
+# simple.EVAL
+[+ 1 2]
+
+# simple-long.EVAL
+a-symbol '#b-symbol @#quote#c-symbol (a b c) () '() typed(?) [a b c] [] '[] typed[?]
+

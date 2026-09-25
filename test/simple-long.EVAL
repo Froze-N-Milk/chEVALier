@@ -1,0 +1,18 @@
+;; this is a long, but fairly simple chEVALier file
+
+;; top-level symbols
+a-symbol
+'#b-symbol
+@#quote#c-symbol
+
+;; top level s expressions
+(a b c)
+()
+'()
+typed(?)
+
+;; top level m expressions
+[a b c]
+[]
+'[]
+typed[?]
