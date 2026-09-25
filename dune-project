@@ -19,7 +19,10 @@
  (name chEVALier)
  (synopsis "A short synopsis")
  (description "A longer description")
- (depends ocaml)
+ (depends
+   (ocaml (>= 5.4))
+   ocamlformat
+   ocaml-lsp-server)
  (tags
   ("add topics" "to describe" your project)))
 
