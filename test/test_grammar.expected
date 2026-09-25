@@ -1,0 +1,34 @@
+# (+ 1 2)
+(+ 1 2)
+
+# [+ 1 2]
+[+ 1 2]
+
+# [+ 1 2)
+Failed to parse input, encounted unexpected character @ (1:7)
+[+ 1 2)
+      ^
+
+# '#hello
+'#hello
+
+# [ '() ]
+['()]
+
+# '()
+'()
+
+# '(+ 1 2)
+'(+ 1 2)
+
+# prefix(+ 1 2)
+prefix (+ 1 2)
+
+# '#prefix(+ 1 2)
+'#prefix (+ 1 2)
+
+# ( '#prefix(+ 1 2) '#prefix(+ 1 2) )
+('#prefix(+ 1 2) '#prefix(+ 1 2))
+
+# simple.EVAL
+[+ 1 2]

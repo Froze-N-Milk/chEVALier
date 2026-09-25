@@ -1,3 +1,4 @@
-(test
- (name test_grammar)
+(tests
+ (names test_grammar test_parser)
+ (deps simple.EVAL)
  (libraries chEVALier))
