@@ -51,11 +51,14 @@ and expression =
   | String of string
   | Expr of brackets * expression list
 
+val expr_to_string : expression -> string
+val exprs_to_string : expression list -> string
+
 module type S = sig
   type args
 
-  val parse : args -> expression list
+  val parse : args -> (expression list, string) result
 end
 
-module File : S with type args = string
-module String : S with type args = string
+module File : S with type args = Parser.File.args
+module String : S with type args = Parser.String.args

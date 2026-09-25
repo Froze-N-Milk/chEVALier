@@ -6,6 +6,29 @@ and expression =
   | String of string
   | Expr of brackets * expression list
 
+let rec expr_to_string expr =
+  match expr with
+  | Prefix (prefix, Sym sym) -> prefix ^ "#" ^ sym
+  | Prefix (prefix, Prefix (prefix', expr)) ->
+      prefix ^ "#" ^ expr_to_string (Prefix (prefix', expr))
+  | Prefix (prefix, expr) -> prefix ^ expr_to_string expr
+  | Sym sym -> sym
+  | String str -> "\"" ^ str ^ "\""
+  | Expr (brackets, exprs) -> (
+      match brackets with
+      | Round -> "(" ^ exprs_to_string exprs ^ ")"
+      | Square -> "[" ^ exprs_to_string exprs ^ "]")
+
+and exprs_to_string exprs =
+  match exprs with
+  | [] -> ""
+  | expr :: exprs -> expr_to_string expr ^ exprs_to_string' exprs
+
+and exprs_to_string' exprs =
+  match exprs with
+  | [] -> ""
+  | expr :: exprs -> " " ^ expr_to_string expr ^ exprs_to_string' exprs
+
 module Make (Input : Parser.Input) = struct
   open Parser.Make (Input)
 
@@ -43,7 +66,7 @@ module Make (Input : Parser.Input) = struct
   let separator =
     let comment =
       (* comment character *)
-      let* _ = char @@ ( == ) ';' in
+      let* _ = char @@ ( = ) ';' in
       (* consume line *)
       consume @@ char @@ ( != ) '\n'
     in
@@ -56,24 +79,24 @@ module Make (Input : Parser.Input) = struct
     consume @@ (comment or whitespace)
 
   let escaped_char =
-    let* _ = char @@ ( == ) '\\' in
+    let* _ = char @@ ( = ) '\\' in
     (* TODO: actually handle escapes *)
     char (fun _ -> true)
 
   let string =
-    let* _ = char @@ ( == ) '"' in
+    let* _ = char @@ ( = ) '"' in
     let* string = greedy (escaped_char or (char @@ ( != ) '"')) in
-    let+ _ = char @@ ( == ) '"' in
+    let+ _ = char @@ ( = ) '"' in
     String (String.of_seq string)
 
   (* tries to collect as many prefixes as possible, then parse an expression *)
   let prefixed (exprk : expression parser) =
     let sym_hash =
       let* sym = sym_common in
-      let+ _ = char @@ ( == ) '#' in
+      let+ _ = char @@ ( = ) '#' in
       sym
     in
-    fold_right (fun sym expr -> Prefix (sym, expr)) exprk sym_hash
+    fold_right (fun sym expr -> Prefix (sym, expr)) exprk @@ sym_hash
 
   let rec expression input =
     (prefixed @@ first [ sym; string; round_expression; square_expression ])
@@ -81,39 +104,38 @@ module Make (Input : Parser.Input) = struct
 
   and expression_body input =
     (let expr =
-       let* () = separator in
+       let* expression in
+       let+? _ = separator in
        expression
      in
      let*? _ = separator in
-     let* exprs = greedy expr in
-     let+? _ = separator in
-     exprs)
+     greedy expr)
       input
 
   and round_expression input =
-    (let* _ = char @@ ( == ) '(' in
+    (let* _ = char @@ ( = ) '(' in
      let* exprs = expression_body in
-     let+ _ = char @@ ( == ) ')' in
+     let+ _ = char @@ ( = ) ')' in
      Expr (Round, List.of_seq exprs))
       input
 
   and square_expression input =
-    (let* _ = char @@ ( == ) '[' in
+    (let* _ = char @@ ( = ) '[' in
      let* exprs = expression_body in
-     let+ _ = char @@ ( == ) ']' in
+     let+ _ = char @@ ( = ) ']' in
      Expr (Square, List.of_seq exprs))
       input
 
   let parse =
-    let* () = separator in
+    let*? _ = separator in
     let* exprs =
       greedy
       @@
       let* expression in
-      let+ () = separator in
+      let+? _ = separator in
       expression
     in
-    let* () = separator in
+    let*? _ = separator in
     let+ () = eof in
     List.of_seq exprs
 end
@@ -121,27 +143,26 @@ end
 module type S = sig
   type args
 
-  val parse : args -> expression list
+  val parse : args -> (expression list, string) result
 end
 
 module File = struct
-  module Parser = Make (Parser.File)
+  module Syntax = Make (Parser.File)
 
-  type args = string
+  type args = Parser.File.args
 
   (** opens and the contents of a file *)
-  let parse file =
-    let _, exprs = In_channel.with_open_bin file Parser.parse in
-    exprs
+  let parse args =
+    Result.map (fun (_, exprs) -> exprs) @@ Parser.File.parse args Syntax.parse
 end
 
 module String = struct
-  module Parser = Make (Parser.String)
+  module Syntax = Make (Parser.String)
 
-  type args = string
+  type args = Parser.String.args
 
   (** parses a string *)
-  let parse string =
-    let _, exprs = Parser.parse (0, string) in
-    exprs
+  let parse args =
+    Result.map (fun (_, exprs) -> exprs)
+    @@ Parser.String.parse args Syntax.parse
 end

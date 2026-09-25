@@ -1,12 +1,13 @@
-exception Mismatch
-
 module type S = sig
   type input
   type 'a t = input -> input * 'a
 
-  val ( or ) : 'a t -> 'a t -> 'a t
+  exception Mismatch of input
+
+  val dbg : string -> 'a t -> 'a t
   val return : 'a -> 'a t
   val fail : 'a t
+  val ( or ) : 'a t -> 'a t -> 'a t
   val ( let* ) : 'a t -> ('a -> 'b t) -> 'b t
   val ( let*? ) : 'a t -> ('a option -> 'b t) -> 'b t
   val ( let+ ) : 'a t -> ('a -> 'b) -> 'b t
@@ -24,12 +25,18 @@ module type Input = sig
   type t
   type position
 
+  exception Mismatch of t
+
   val next : t -> (t * char) option
   val position : t -> position
   val ( or ) : (t -> 'a) -> (t -> 'a) -> t -> 'a
+  val to_string : t -> string
+
+  type args
+
+  val parse : args -> (t -> 'a) -> ('a, string) result
 end
 
 module Make (Input : Input) : S with type input = Input.t
-
-module File : Input with type t = in_channel and type position = int64
-module String : Input with type t = int * string and type position = int
+module File : Input with type args = string
+module String : Input with type args = string

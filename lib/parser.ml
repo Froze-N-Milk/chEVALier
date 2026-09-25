@@ -1,14 +1,15 @@
 (** defines a monadic parser combinator system for use with {!in_channel} s *)
 
-exception Mismatch
-
 module type S = sig
   type input
   type 'a t = input -> input * 'a
 
-  val ( or ) : 'a t -> 'a t -> 'a t
+  exception Mismatch of input
+
+  val dbg : string -> 'a t -> 'a t
   val return : 'a -> 'a t
   val fail : 'a t
+  val ( or ) : 'a t -> 'a t -> 'a t
   val ( let* ) : 'a t -> ('a -> 'b t) -> 'b t
   val ( let*? ) : 'a t -> ('a option -> 'b t) -> 'b t
   val ( let+ ) : 'a t -> ('a -> 'b) -> 'b t
@@ -26,9 +27,16 @@ module type Input = sig
   type t
   type position
 
+  exception Mismatch of t
+
   val next : t -> (t * char) option
   val position : t -> position
   val ( or ) : (t -> 'a) -> (t -> 'a) -> t -> 'a
+  val to_string : t -> string
+
+  type args
+
+  val parse : args -> (t -> 'a) -> ('a, string) result
 end
 
 module Make (Input : Input) = struct
@@ -36,11 +44,24 @@ module Make (Input : Input) = struct
   type position = Input.position
   type 'a t = Input.t -> Input.t * 'a
 
+  exception Mismatch = Input.Mismatch
+
+  let dbg message (p : 'a t) : 'a t =
+   fun input ->
+    print_endline @@ "entered " ^ message;
+    try
+      let result = p input in
+      print_endline @@ "exited " ^ message ^ " successfully";
+      result
+    with any ->
+      print_endline @@ "exited " ^ message ^ " unsuccessfully";
+      raise any
+
   (** monadic lift *)
   let return a : 'a t = fun input -> (input, a)
 
   (** failure *)
-  let fail (_ : Input.t) : Input.t * 'a = raise Mismatch
+  let fail (input : Input.t) : Input.t * 'a = raise (Mismatch input)
 
   (** or *)
   let ( or ) (a : 'a t) (b : 'a t) : 'a t = Input.(a or b)
@@ -70,8 +91,7 @@ module Make (Input : Input) = struct
     or fun input -> (input, f None)
 
   (** tries each in order *)
-  let first (parsers : 'a t list) : 'a t =
-    List.fold_left (fun tail head -> head or tail) fail parsers
+  let first (parsers : 'a t list) : 'a t = List.fold_right ( or ) parsers fail
 
   (** left fold recursive combinator *)
   let rec fold_left (f : 'b -> 'a -> 'a) (init : 'a) (p : 'b t) : 'a t =
@@ -98,17 +118,22 @@ module Make (Input : Input) = struct
    fun input ->
     match Input.next input with
     | Some (input, c) when pred c -> (input, c)
-    | _ -> raise Mismatch
+    | Some (input, _) -> raise (Mismatch input)
+    | _ -> raise (Mismatch input)
 
   (** match the end of input *)
   let eof =
    fun input ->
-    match Input.next input with None -> (input, ()) | _ -> raise Mismatch
+    match Input.next input with
+    | None -> (input, ())
+    | Some (input, _) -> raise (Mismatch input)
 end
 
 module File = struct
   type position = int64
   type t = in_channel
+
+  exception Mismatch of t
 
   let next channel =
     try Some (channel, input_char channel) with End_of_file -> None
@@ -116,26 +141,73 @@ module File = struct
   let position channel = LargeFile.pos_in channel
 
   let ( or ) a b =
-   fun input ->
-    let pos = position input in
-    try a input
-    with Mismatch ->
-      LargeFile.seek_in input pos;
-      b input
+   fun channel ->
+    let pos = position channel in
+    try a channel
+    with Mismatch _ ->
+      LargeFile.seek_in channel pos;
+      b channel
 
-  let open_input path : t = In_channel.open_bin path
-  let close_input t = In_channel.close t
-  let with_input path f = In_channel.with_open_bin path f
+  (* TODO: improve to return line and column number *)
+  let to_string channel = "character " ^ Int64.to_string @@ position channel
+
+  type args = string
+
+  let parse file parse =
+    try Ok (In_channel.with_open_bin file parse)
+    with Mismatch input -> Error (to_string input)
 end
 
 module String = struct
   type position = int
-  type t = position * string
+  type t = { curr : position; furthest : position; str : string }
 
-  let next ((pos, str) : t) : (t * char) option =
-    if pos < String.length str then Some ((pos + 1, str), String.get str pos)
+  exception Mismatch of t
+
+  let next ({ curr; furthest; str } : t) : (t * char) option =
+    if curr < String.length str then
+      let next =
+        { curr = curr + 1; furthest = max furthest @@ (curr + 1); str }
+      in
+      let char = String.get str curr in
+      Some (next, char)
     else None
 
-  let position (pos, _) = pos
-  let ( or ) a b = fun input -> try a input with Mismatch -> b input
+  let position ({ curr } : t) = curr
+
+  let ( or ) a b =
+   fun input ->
+    try a input
+    with Mismatch input' ->
+      b { input with furthest = max input.furthest input'.furthest }
+
+  (** locates the line and column *)
+  let to_string ({ furthest; str } : t) =
+    if furthest > String.length str then
+      raise @@ Invalid_argument "invalid position";
+    let rec f lines line_start pos =
+      (* convert eof to new line *)
+      let char = if pos < String.length str then String.get str pos else '\n' in
+      match char with
+      (* eol, found target line *)
+      | '\n' when pos >= furthest ->
+          let cols = pos - line_start in
+          let line = String.sub str line_start cols in
+          let line_no = Int.to_string lines in
+          "Failed to parse input, encounted unexpected character @ ("
+          ^ line_no ^ ":" ^ Int.to_string cols ^ ")\n" ^ line ^ "\n"
+          ^ String.make (cols - 1) ' '
+          ^ "^"
+      (* eol, before target line *)
+      | '\n' -> f (lines + 1) (pos + 1) (pos + 1)
+      (* otherwise ignore *)
+      | _ -> f lines line_start (pos + 1)
+    in
+    f 1 0 0
+
+  type args = string
+
+  let parse string f =
+    try Ok (f { curr = 0; furthest = 0; str = string })
+    with Mismatch input -> Error (to_string input)
 end
