@@ -30,6 +30,3 @@ prefix(+ 1 2)
 # ( '#prefix(+ 1 2) '#prefix(+ 1 2) )
 ('#prefix(+ 1 2) '#prefix(+ 1 2))
 
-# simple.EVAL
-[+ 1 2]
-
