@@ -6,31 +6,44 @@ type ty =
   | Int
   | Real
   | Product of ty * ty
-  | Procedure of ty * ty
+  | Function of ty * ty
   | Construction of ty list
 
 (* values *)
 and value =
-  | Bound of int
-  | Unbound of string
+  (* debruijn indexed variable *)
+  | Var of int
   | Unit
   | Bool of bool
   | Int of int
   | Real of float
   | Record of value * value
-  (* static function pointer *)
-  | Label of label
+  (* TODO:
+     probably need a 'proc-closure' and 'cont-closure'
+     these should contain a proc_value / cont_value and a record of captured
+     values *)
+  | Procedure of proc_value
+  | Continuation of cont_value
   | Construction of int * value
 
-(* special type for function addresses *)
-and label = Label of int
+(* type for user function addresses *)
+and proc_value = int
+
+(* type for continuation addresses *)
+and cont_value =
+  | Halt
+  | Label of int
 
 (* each expression pushes its return value onto the 'stack' *)
 and expression =
+  (* halt with exit code *)
+  | Halt of value
   (* used in type checking *)
   | Assert of ty * expression
-  (* apply a procedure to value *)
-  | Apply of label * value
+  (* apply procedure to argument, continuing with k *)
+  | Apply of value * value * value
+  (* apply continuation to argument *)
+  | Return of value * value
   (* branching *)
   | Switch of value * expression * expression list
   (* bool operations *)
@@ -63,21 +76,28 @@ and expression =
   | Rdiv of value * value * expression
   | Rmod of value * value * expression
 
+  (*
 (** does type checking and inference using a bidirectional type checking system
     collects errors as it goes, type checking passes if no errors are collected
-*)
+
+    TODO: need to properly track errors *)
 module Types = struct
-  type context = { procedures : (ty * ty) list; values : ty list }
+  type context = {
+    procedures : (ty * ty) list;
+    continuations : (ty * ty) list;
+    values : ty list;
+  }
   (** type checking function context *)
 
   (** looks up a procedure in the context *)
-  let lookup_proc ctx (Label addr : label) = List.nth ctx.procedures addr
+  let lookup_proc ctx (addr : proc_value) = List.nth ctx.procedures addr
+
+  let lookup_cont ctx (addr : cont_value) = List.nth ctx.continuations addr
 
   (** looks up a value in the context *)
   let lookup_value ctx addr = List.nth ctx.values addr
 
-  let append_value ctx value =
-    { procedures = ctx.procedures; values = value :: ctx.values }
+  let append_value ctx value = { ctx with values = value :: ctx.values }
 
   (** type checking error types *)
   type err =
@@ -120,23 +140,32 @@ module Types = struct
 
   (** monadic lift for checking if two types are equal *)
   let check_eq expected found =
-    if expected == found then ok else err @@ Mismatch { expected; found }
+    if expected = found then ok else err @@ Mismatch { expected; found }
 
   (** type check expression *)
   let rec check_expr ctx ty expr : check_result =
     match expr with
+    | Halt -> ok
     | Assert (ty', expr) ->
         (* check that the assertion checks *)
         check_expr ctx ty' expr
         (* check that the assertion matches the checked type *)
         @ check_eq ty ty'
-    | Apply (proc, arg) ->
-        (* lookup the label in context *)
+    | Apply (proc, arg, k) ->
+        (* lookup the cont in context *)
+        let karg_ty, kret_ty = lookup_cont ctx k in
+        (* lookup the proc in context *)
         let arg_ty, ret_ty = lookup_proc ctx proc in
         (* check that the argument matches *)
         check_value ctx arg_ty arg
-        (* the return type *)
-        @ check_eq ty ret_ty
+        (* check that the continuation's argument type matches the procedure's
+           return type *)
+        @ check_eq karg_ty ret_ty
+        (* check the continuation's return type *)
+        @ check_eq ty kret_ty
+    | Return (k, arg) ->
+        let arg_ty, ret_ty = lookup_cont ctx k in
+        check_value ctx arg_ty arg @ check_eq ty ret_ty
     | Switch (_, hd, tl) ->
         (*
            todo:
@@ -240,7 +269,7 @@ module Types = struct
     (* check a and b components *)
     | Product (a_ty, b_ty), Record (a, b) ->
         check_value ctx a_ty a @ check_value ctx b_ty b
-    | Procedure (arg, ret), Label label ->
+    | Function (arg, ret), Procedure label ->
         let arg', ret' = lookup_proc ctx label in
         (* check arg *)
         check_eq arg arg'
@@ -255,12 +284,25 @@ module Types = struct
 
   and infer_expr ctx expr : infer_result =
     match expr with
+    | Halt -> (Never, ok)
     | Assert (ty, expr) ->
         (* switch to checking mode *)
         (ty, check_expr ctx ty expr)
-    | Apply (proc, arg) ->
-        (* lookup the label in context *)
+    | Apply (proc, arg, k) ->
+        (* lookup the cont in context *)
+        let karg_ty, kret_ty = lookup_cont ctx k in
+        (* lookup the proc in context *)
         let arg_ty, ret_ty = lookup_proc ctx proc in
+        (* infer kret_ty *)
+        ( kret_ty,
+          (* check that the argument matches *)
+          check_value ctx arg_ty arg
+          (* check that the continuation's argument type matches the procedure's
+           return type *)
+          @ check_eq karg_ty ret_ty )
+    | Return (k, arg) ->
+        (* lookup the continuation in context *)
+        let arg_ty, ret_ty = lookup_proc ctx k in
         (* check that the argument matches *)
         (* infer ret_ty *)
         (ret_ty, check_value ctx arg_ty arg)
@@ -347,8 +389,12 @@ module Types = struct
         let* a = infer_value ctx a in
         let+ b = infer_value ctx b in
         Product (a, b)
-    | Label label ->
-        let arg_ty, ret_ty = lookup_proc ctx label in
-        (Procedure (arg_ty, ret_ty), ok)
+    | Procedure proc ->
+        let arg_ty, ret_ty = lookup_proc ctx proc in
+        (Function (arg_ty, ret_ty), ok)
+    | Continuation cont ->
+        let arg_ty, ret_ty = lookup_cont ctx cont in
+        (Function (arg_ty, ret_ty), ok)
     | Construction (_, _) -> (Never, err @@ Unknown)
 end
+*)
