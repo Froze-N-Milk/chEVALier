@@ -9,10 +9,195 @@ module CPS = struct
   type ty = Language.ty
   type value = Language.value
   type proc_val = Language.proc_value
-  type cont_val = Language.cont_value
   type expr = Language.expression
+
+  (** checks if a value is acceptably small to be duplicated *)
+  let rec small_value (v : value) =
+    match v with
+    (* values like pointers, unit, bools, numbers are all small *)
+    | Var _ | Unit | Bool _ | Int _ | Real _ -> true
+    (* records are small if their contents are small *)
+    | Record (car, cdr) -> small_value car && small_value cdr
+    (* closures are not small *)
+    | Procedure (Expr _) -> false
+    (* builin procedures are small *)
+    | Procedure Halt
+    | Procedure Cons
+    | Procedure Car
+    | Procedure Cdr
+    | Procedure Not
+    | Procedure And
+    | Procedure Or
+    | Procedure Xor
+    | Procedure Ieq
+    | Procedure Ineq
+    | Procedure Igt
+    | Procedure Igte
+    | Procedure Ilt
+    | Procedure Ilte
+    | Procedure Iadd
+    | Procedure Isub
+    | Procedure Imul
+    | Procedure Idiv
+    | Procedure Imod
+    | Procedure Req
+    | Procedure Rneq
+    | Procedure Rgt
+    | Procedure Rgte
+    | Procedure Rlt
+    | Procedure Rlte
+    | Procedure Radd
+    | Procedure Rsub
+    | Procedure Rmul
+    | Procedure Rdiv
+    | Procedure Rmod ->
+        true
+    (* inductive types are not small *)
+    | Construction (_, _) -> false
 end
 
+type cont = Language.expression
+type value = Language.value
+
+(* TODO:
+   two parts:
+     1. a constant map of sym -> meta_value
+     2. a var indexing of sym list
+
+   many functions will need an env added i suspect, or way to instruct it to add
+   smth to the env ?? hard to tell... *)
+type env
+
+and meta_value =
+  | Value of value
+  | Closure of { syms : string list; env : env; body : Syntax.t }
+
+(* TODO: do i need the binding? *)
+(* TODO:
+     of course not, the binding is always Var 0, i need to correct the
+     rest of the bindings *)
+(* TODO: need to shift the env by one! *)
+let bind_sym (sym : string) (env : env) : env = failwith "TODO"
+let bind_anon (env : env) : env = failwith "TODO"
+let bind_const (sym : string) (arg : value) (env : env) : env = failwith "TODO"
+
+type meta_cont = meta_value -> cont
+
+(** top-level convert *)
+let rec cps (syn : Syntax.t) (env : env) (k : meta_cont) : cont =
+  match syn with
+  | Prefix _ -> failwith "TODO"
+  | Sym _ -> failwith "TODO"
+  | String _ -> failwith "TODO"
+  (* function application *)
+  | Expr (Round, fn :: args) -> cps fn env @@ cps_args args env k
+  | Expr _ -> failwith "TODO"
+
+(* TODO:
+   when you bless a closure, you need to shift the env by the number of
+   bindings that have added since, in order to do this,
+   you add a shift layer,
+   that delays the shifting util you bless it
+   i.e:
+     Shift (Var 0) -> Var 1
+     Shift (Shift (Var 0)) -> Var 2
+     (* constants are unaffected *)
+     Shift (Shift (Unit)) -> Unit
+     Shift (Shift ({ syms, env, body })) ->
+       bind 2 anonymous values to env first
+       ...
+   *)
+(** converts a meta_value to a value *)
+and bless_value (v : meta_value) : value =
+  match v with
+  | Value v -> v
+  | Closure { syms; env; body } -> (
+
+      (* the left most value gets the highest number *)
+      let env = List.fold_left (fun env sym -> bind_sym sym env) env syms in
+      let args_size = List.length syms in
+      (* the expected list of arguments for n-reduction *)
+      (* this looks like [ X ... 3; 2; 1; 0; ] *)
+      let n_args =
+        (Var args_size : value)
+        :: List.mapi (fun i _ -> (Var (args_size - i - 1) : value)) syms
+      in
+      (* bind the continuation k to 0 *)
+      let cont = cps body (bind_anon env) k in
+      match cont with
+      (* if we just apply the args in order, n-reduce fn *)
+      | Apply (fn, args) when args = n_args -> fn
+      (* otherwise, capture *)
+      | _ -> Procedure (Expr cont))
+
+and bless_cont (k : meta_cont) : value =
+  (* TODO: need to shift the env by one? *)
+  let cont = k @@ Value (Var 0) in
+  match cont with
+  | Halt (Var 0) -> Procedure Halt
+  | Apply (fn, [ Var 0 ]) -> fn
+  (* TODO: how does this work with assert? *)
+  | _ -> Procedure (Expr cont)
+
+(** constructs a meta-cont for a function that continues with k *)
+and cps_fn (fn : meta_value) (k : meta_cont) : meta_value list -> cont =
+  match fn with
+  | Value fn ->
+      fun args ->
+        (* TODO:
+           each value that we bless might change the number of bound
+           values *)
+        let args = List.map bless_value args in
+        let k = bless_cont k in
+        (* we pass k as the last parameter *)
+        Apply (fn, args @ [ k ])
+  | Closure { syms; env; body } ->
+      fun args ->
+        (* TODO:
+         if sym is only used once in the body, then we can inline it
+         regardless of size,
+         the reference implementation cheats to determine this,
+         so i've left it off at the moment *)
+        (* bless the args *)
+        let args = bless_value args in
+        if CPS.small_value args
+        (* if the argument is small
+           then we are happy to inline it,
+           regardless of duplication *)
+        then cps body (bind_const sym args env) k
+        (* otherwise, we lower the closure and then apply it to the value,
+           making it a var *)
+          else
+          let cont = cps body (bind_sym sym env) k in
+          (Apply (Procedure (Expr cont), args) : cont)
+
+(** constructs a meta-cont for a list of args *)
+and cps_args (syns : Syntax.t list) (env : env) (k : meta_cont)
+    (fn : meta_value) : cont =
+  let fn = cps_fn fn k in
+  (* this is complicated
+     we fold up the arguments from right to left,
+     which creates a left to right evaluation order,
+     continuing with calling the function
+     the function expects a list of arguments
+     so we actually continue by re-accumulating the list
+     in the meta continuation *)
+  List.fold_right
+    (* arg syntax, meta continuation that takes a list of args *)
+    (fun syn k -> fun args -> cps syn env @@ fun arg -> k (arg :: args))
+    syns fn []
+
+and cons (car : meta_value) (cdr : meta_value) : cont =
+  let car = bless_value car in
+  let cdr = bless_value cdr in
+  Apply (Procedure Cons, [ car; cdr ])
+
+and halt (arg : meta_value) : cont = Halt (bless_value arg)
+(*
+and k (arg : meta_value) : cont = Apply (Var 0, bless_value arg)
+*)
+
+(*
 (* TODO *)
 type context = { procedures : CPS.expr list; continuations : CPS.expr list }
 (** stores procedures and continuations *)
@@ -76,11 +261,15 @@ let bind_const ({ table; count } : environment) (sym : string) (value : value) :
     environment =
   { table = SymMap.add sym value table; count = count + 1 }
 
-let rec lower (syn : Syntax.t) (ctx : environment) (k : expr) : CPS.expr lowered
+let rec lower
+(syn : Syntax.t)
+(env : environment)
+(k : expr) : CPS.expr lowered
     =
   match syn with
   | Prefix (_, _) -> failwith "TODO"
-  | Sym _ -> failwith "TODO"
+  | Sym sym -> let v = lookup env sym in
+      lower_ret k v
   | String _ -> failwith "TODO"
   | Expr (_, _) -> failwith "TODO"
 
@@ -171,3 +360,4 @@ and lower_value (v : value) : CPS.value lowered =
           let+ proc = store_proc proc in
           (* return the label as a cps value *)
           (Procedure proc : CPS.value))
+          *)

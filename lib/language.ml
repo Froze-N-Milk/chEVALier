@@ -1,4 +1,4 @@
-(* types *)
+(** types *)
 type ty =
   | Never
   | Unit
@@ -6,10 +6,11 @@ type ty =
   | Int
   | Real
   | Product of ty * ty
-  | Function of ty * ty
+  (* argument type is a unit terminated cons-record *)
+  | Function of ty list * ty
   | Construction of ty list
 
-(* values *)
+(** values *)
 and value =
   (* debruijn indexed variable *)
   | Var of int
@@ -18,21 +19,52 @@ and value =
   | Int of int
   | Real of float
   | Record of value * value
-  (* TODO:
-     probably need a 'proc-closure' and 'cont-closure'
-     these should contain a proc_value / cont_value and a record of captured
-     values *)
+  (* procedure *)
   | Procedure of proc_value
-  | Continuation of cont_value
   | Construction of int * value
 
-(* type for user function addresses *)
-and proc_value = int
-
-(* type for continuation addresses *)
-and cont_value =
+(** type of procedure *)
+and proc_value =
+  (* arbitrary expression *)
+  | Expr of expression
+  (* builtin procedures *)
+  (* halt *)
   | Halt
-  | Label of int
+  (* records *)
+  (* introduction *)
+  | Cons
+  (* elimination *)
+  | Car
+  | Cdr
+  (* bool operations *)
+  | Not
+  | And
+  | Or
+  | Xor
+  (* int operations *)
+  | Ieq
+  | Ineq
+  | Igt
+  | Igte
+  | Ilt
+  | Ilte
+  | Iadd
+  | Isub
+  | Imul
+  | Idiv
+  | Imod
+  (* real operations *)
+  | Req
+  | Rneq
+  | Rgt
+  | Rgte
+  | Rlt
+  | Rlte
+  | Radd
+  | Rsub
+  | Rmul
+  | Rdiv
+  | Rmod
 
 (* each expression pushes its return value onto the 'stack' *)
 and expression =
@@ -40,43 +72,12 @@ and expression =
   | Halt of value
   (* used in type checking *)
   | Assert of ty * expression
-  (* apply procedure to argument, continuing with k *)
-  | Apply of value * value * value
-  (* apply continuation to argument *)
-  | Return of value * value
+  (* apply procedure to arguments *)
+  | Apply of value * value list
   (* branching *)
   | Switch of value * expression * expression list
-  (* bool operations *)
-  | Not of value * expression
-  | And of value * value * expression
-  | Or of value * value * expression
-  | Xor of value * value * expression
-  (* int operations *)
-  | Ieq of value * value * expression
-  | Ineq of value * value * expression
-  | Igt of value * value * expression
-  | Igte of value * value * expression
-  | Ilt of value * value * expression
-  | Ilte of value * value * expression
-  | Iadd of value * value * expression
-  | Isub of value * value * expression
-  | Imul of value * value * expression
-  | Idiv of value * value * expression
-  | Imod of value * value * expression
-  (* real operations *)
-  | Req of value * value * expression
-  | Rneq of value * value * expression
-  | Rgt of value * value * expression
-  | Rgte of value * value * expression
-  | Rlt of value * value * expression
-  | Rlte of value * value * expression
-  | Radd of value * value * expression
-  | Rsub of value * value * expression
-  | Rmul of value * value * expression
-  | Rdiv of value * value * expression
-  | Rmod of value * value * expression
 
-  (*
+(*
 (** does type checking and inference using a bidirectional type checking system
     collects errors as it goes, type checking passes if no errors are collected
 
