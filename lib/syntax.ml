@@ -1,33 +1,32 @@
-type brackets = Round | Square
+type brackets = Round | Square | Curly
 
 and expression =
-  | Prefix of string * expression
   | Sym of string
-  | String of string
-  | Expr of brackets * expression list
+  | String of string option * string
+  | Expr of string option * brackets * expression list
 
-let rec expr_to_string expr =
+let rec expr_to_string expr tail =
   match expr with
-  | Prefix (prefix, Sym sym) -> prefix ^ "#" ^ sym
-  | Prefix (prefix, Prefix (prefix', expr)) ->
-      prefix ^ "#" ^ expr_to_string (Prefix (prefix', expr))
-  | Prefix (prefix, expr) -> prefix ^ expr_to_string expr
-  | Sym sym -> sym
-  | String str -> "\"" ^ str ^ "\""
-  | Expr (brackets, exprs) -> (
+  | Sym sym -> sym :: tail
+  | String (prefix, str) -> "\"" :: String.escaped str :: "\"" :: tail
+  | Expr (prefix, brackets, exprs) -> (
       match brackets with
-      | Round -> "(" ^ exprs_to_string exprs ^ ")"
-      | Square -> "[" ^ exprs_to_string exprs ^ "]")
+      | Round -> "(" :: exprs_to_string exprs (")" :: tail)
+      | Square -> "[" :: exprs_to_string exprs ("]" :: tail)
+      | Curly -> "{" :: exprs_to_string exprs ("}" :: tail))
 
-and exprs_to_string exprs =
+and exprs_to_string exprs tail =
   match exprs with
-  | [] -> ""
-  | expr :: exprs -> expr_to_string expr ^ exprs_to_string' exprs
+  | [] -> tail
+  | expr :: exprs -> expr_to_string expr (exprs_to_string' exprs tail)
 
-and exprs_to_string' exprs =
+and exprs_to_string' exprs tail =
   match exprs with
-  | [] -> ""
-  | expr :: exprs -> " " ^ expr_to_string expr ^ exprs_to_string' exprs
+  | [] -> tail
+  | expr :: exprs -> " " :: expr_to_string expr (exprs_to_string' exprs tail)
+
+let expr_to_string expr = String.concat "" @@ expr_to_string expr []
+let exprs_to_string exprs = String.concat "" @@ exprs_to_string exprs []
 
 module Make (Input : Parser.Input) = struct
   open Parser.Make (Input)
@@ -46,8 +45,10 @@ module Make (Input : Parser.Input) = struct
           (* square expressions *)
           && char != '['
           && char != ']'
-          (* prefix separator and comment *)
-          && char != '#'
+          (* curly expressions *)
+          && char != '{'
+          && char != '}'
+          (* comment *)
           && char != ';'
           (* whitespace *)
           && (not @@ Char.Ascii.is_white char))
@@ -83,31 +84,23 @@ module Make (Input : Parser.Input) = struct
     (* TODO: actually handle escapes *)
     char (fun _ -> true)
 
-  (* tries to collect as many prefixes as possible, then parse an expression *)
-  let prefixed (exprk : expression parser) =
-    let sym_hash =
-      let* sym = sym_common in
-      let+ _ = char @@ ( = ) '#' in
-      sym
-    in
-    fold_right (fun sym expr -> Prefix (sym, expr)) exprk @@ sym_hash
-
-  (* collects a final prefix, for everything but sym *)
-  let prefix expr =
-    let*? sym = sym_common in
-    let+ expr in
-    match sym with Some sym -> Prefix (sym, expr) | None -> expr
-
   let string =
-    prefix
-    @@
     let* _ = char @@ ( = ) '"' in
     let* string = greedy (escaped_char or (char @@ ( != ) '"')) in
     let+ _ = char @@ ( = ) '"' in
-    String (String.of_seq string)
+    String (None, String.of_seq string)
 
   let rec expression input =
-    (prefixed @@ first [ string; round_expression; square_expression; sym ])
+    (let*? prefix = sym_common in
+     let*? suffix =
+       first [ string; round_expression; square_expression; curly_expression ]
+     in
+     match (prefix, suffix) with
+     | Some sym, None -> return @@ Sym sym
+     | prefix, Some (String (_, str)) -> return @@ String (prefix, str)
+     | prefix, Some (Expr (_, brackets, exprs)) ->
+         return @@ Expr (prefix, brackets, exprs)
+     | _ -> fail)
       input
 
   and expression_body input =
@@ -121,19 +114,24 @@ module Make (Input : Parser.Input) = struct
       input
 
   and round_expression input =
-    (prefix
-    @@ let* _ = char @@ ( = ) '(' in
-       let* exprs = expression_body in
-       let+ _ = char @@ ( = ) ')' in
-       Expr (Round, List.of_seq exprs))
+    (let* _ = char @@ ( = ) '(' in
+     let* exprs = expression_body in
+     let+ _ = char @@ ( = ) ')' in
+     Expr (None, Round, List.of_seq exprs))
       input
 
   and square_expression input =
-    (prefix
-    @@ let* _ = char @@ ( = ) '[' in
-       let* exprs = expression_body in
-       let+ _ = char @@ ( = ) ']' in
-       Expr (Square, List.of_seq exprs))
+    (let* _ = char @@ ( = ) '[' in
+     let* exprs = expression_body in
+     let+ _ = char @@ ( = ) ']' in
+     Expr (None, Square, List.of_seq exprs))
+      input
+
+  and curly_expression input =
+    (let* _ = char @@ ( = ) '{' in
+     let* exprs = expression_body in
+     let+ _ = char @@ ( = ) '}' in
+     Expr (None, Curly, List.of_seq exprs))
       input
 
   let parse =

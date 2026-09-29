@@ -5,77 +5,86 @@ type ty =
   | Bool
   | Int
   | Real
-  | Product of ty * ty
-  (* argument type is a unit terminated cons-record *)
+  | Product of ty list
   | Function of ty list * ty
   | Construction of ty list
 
-(** values *)
+(** expression-embedded values *)
 and value =
   (* debruijn indexed variable *)
   | Var of int
+  | Unbound of string
   | Unit
   | Bool of bool
   | Int of int
   | Real of float
-  | Record of value * value
-  (* procedure *)
-  | Procedure of proc_value
-  | Construction of int * value
+  | String of string
+  | Procedure of proc
 
-(** type of procedure *)
-and proc_value =
+and proc =
   (* arbitrary expression *)
-  | Expr of expression
+  | Expr of expr
   (* builtin procedures *)
   (* halt *)
+  (* halts with exit code {0} *)
   | Halt
   (* records *)
-  (* introduction *)
+  (* constructs a record from the arguments {n}..{1}, continuing with {0} *)
   | Cons
-  (* elimination *)
-  | Car
-  | Cdr
-  (* bool operations *)
+  (* accesses the {2}th field of the record {1}, continuing with {0} *)
+  | Proj
+  (* boolean operations *)
+  (* returns the boolean negation of {1}, continuing with {0} *)
   | Not
+  (* returns the boolean and of {n}..{1}, continuing with {0} *)
   | And
+  (* returns the boolean or of {n}..{1}, continuing with {0} *)
   | Or
+  (* returns the boolean xor of {n}..{1}, continuing with {0} *)
   | Xor
-  (* int operations *)
-  | Ieq
-  | Ineq
-  | Igt
-  | Igte
-  | Ilt
-  | Ilte
-  | Iadd
-  | Isub
-  | Imul
-  | Idiv
-  | Imod
-  (* real operations *)
-  | Req
-  | Rneq
-  | Rgt
-  | Rgte
-  | Rlt
-  | Rlte
-  | Radd
-  | Rsub
-  | Rmul
-  | Rdiv
-  | Rmod
+  (* polymorphic equality *)
+  (* returns the structural equality of {2} and {1}, continuing with {0} *)
+  | Eq
+  (* returns the structural inequality of {2} and {1}, continuing with {0} *)
+  | Neq
+  (* numeric comparisons *)
+  (* returns the numeric comparion of {2} and {1}, continuing with {0} *)
+  | Gt
+  (* returns the numeric comparion of {2} and {1}, continuing with {0} *)
+  | Gte
+  (* returns the numeric comparion of {2} and {1}, continuing with {0} *)
+  | Lt
+  (* returns the numeric comparion of {2} and {1}, continuing with {0} *)
+  | Lte
+  (* numeric operations *)
+  (* returns the numeric addition of {n}..{1}, continuing with {0} *)
+  | Add
+  (* if n = 2,
+     then returns the numeric negation of {1}
+     else returns {n} - {n - 1}..{1}
+     continuing with {0} *)
+  | Sub
+  (* returns the numeric multiplication of {n}..{1}, continuing with {0} *)
+  | Mul
+  (* returns {2} / {1}, continuing with {0} *)
+  | Div
+  (* returns {2} mod {1}, continuing with {0} *)
+  | Mod
 
 (* each expression pushes its return value onto the 'stack' *)
-and expression =
+and expr =
   (* halt with exit code *)
   | Halt of value
   (* used in type checking *)
-  | Assert of ty * expression
+  | Assert of ty * expr
   (* apply procedure to arguments *)
   | Apply of value * value list
   (* branching *)
-  | Switch of value * expression * expression list
+  | Switch of value * expr * expr list
+  (* constructs a set of mutually recursive procedures *)
+  | Fix of proc list * expr
+  (* unconvertible expression *)
+  | Invalid
 
 (*
 (** does type checking and inference using a bidirectional type checking system
