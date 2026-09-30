@@ -1,4 +1,4 @@
 (executable
- (public_name chEVALier)
+ (public_name EVAL)
  (name main)
  (libraries chEVALier))

@@ -10,10 +10,13 @@ let rec expr_to_string expr tail =
   | Sym sym -> sym :: tail
   | String (prefix, str) -> "\"" :: String.escaped str :: "\"" :: tail
   | Expr (prefix, brackets, exprs) -> (
-      match brackets with
-      | Round -> "(" :: exprs_to_string exprs (")" :: tail)
-      | Square -> "[" :: exprs_to_string exprs ("]" :: tail)
-      | Curly -> "{" :: exprs_to_string exprs ("}" :: tail))
+      let expr =
+        match brackets with
+        | Round -> "(" :: exprs_to_string exprs (")" :: tail)
+        | Square -> "[" :: exprs_to_string exprs ("]" :: tail)
+        | Curly -> "{" :: exprs_to_string exprs ("}" :: tail)
+      in
+      match prefix with Some prefix -> prefix :: expr | None -> expr)
 
 and exprs_to_string exprs tail =
   match exprs with
