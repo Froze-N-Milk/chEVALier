@@ -3,6 +3,8 @@
 module Syntax = struct
   type brackets = Syntax.brackets
   type t = Syntax.expression
+
+  let syntax_to_string = Syntax.expr_to_string
 end
 
 module CPS = struct
@@ -86,7 +88,13 @@ let lookup (sym : string) (env : env) : value =
   let rec determine_index i vars : value =
     match vars with
     (* TODO: convert syms to ints / reals *)
-    | [] -> Unbound sym
+    | [] -> (
+        let to_int = int_of_string_opt sym in
+        let to_real = float_of_string_opt sym in
+        match (to_int, to_real) with
+        | Some i, _ -> Int i
+        | _, Some r -> Real r
+        | _ -> Unbound sym)
     | Var (sym', ty) :: _ when sym = sym' -> Var i
     (* correct a constant pointer by adding the future bindings to it *)
     | Const (sym', ty, Var i') :: _ when sym = sym' -> Var (i + i')
@@ -114,7 +122,7 @@ let rec eval_ty (ty : Syntax.t) (env : env) : CPS.ty =
       let constructor = lookup_ty constructor env in
       Construction (constructor, List.map (fun arg -> eval_ty arg env) args)
   | Sym ty -> lookup_ty ty env
-  | _ -> Invalid
+  | _ -> failwith "unable to eval ty"
 
 let base_env : env =
   {
@@ -148,6 +156,10 @@ let base_env : env =
         Const ("*", Unknown, Procedure Mul);
         Const ("/", Unknown, Procedure Div);
         Const ("%", Unknown, Procedure Mod);
+        (* constants *)
+        Const ("unit", Unit, Unit);
+        Const ("true", Bool, Bool true);
+        Const ("false", Bool, Bool false);
       ];
   }
 
@@ -252,7 +264,7 @@ let rec cps (syn : Syntax.t) (env : env) (k : meta_expr) : expr =
       match let_clauses env clauses with
       (* some alternate closure / nested closure? *)
       | Some (env, bindings, body) -> cps_let bindings env body k
-      | None -> Invalid)
+      | None -> failwith "invalid let form")
   (* [define
        [n (x 10)]
        [x z (+ 1 (y z))]
@@ -264,12 +276,12 @@ let rec cps (syn : Syntax.t) (env : env) (k : meta_expr) : expr =
       match let_clauses env clauses with
       (* some alternate closure / nested closure? *)
       | Some (env, bindings, body) -> cps_define bindings env body k
-      | None -> Invalid)
+      | None -> failwith "invalid define form")
   (* [fn [x @int] [y @real] z ... body] function introduction *)
   | Expr (None, Square, Sym "fn" :: clauses) -> (
       match fn_clauses env clauses with
       | Some (env, bindings, body) -> k @@ Closure { bindings; env; body }
-      | None -> Invalid)
+      | None -> failwith "invalid fn form")
   (* [match x
             ;; matches 1
             [1 (+ 1 2)]
@@ -278,10 +290,16 @@ let rec cps (syn : Syntax.t) (env : env) (k : meta_expr) : expr =
             ;; default (optional if exhaustive)
             3]
             simple pattern matching (doesn't support nesting) *)
-  | Expr (None, Square, Sym "match" :: clauses) -> failwith "TODO"
+  | Expr (None, Square, Sym "match" :: clauses) ->
+      failwith "TODO, match is not currently supported"
   (* (f x y z) function application *)
   | Expr (None, Round, fn :: args) -> cps fn env @@ cps_args args env k
-  | _ -> Invalid
+  (* ?[x] debug *)
+  | Expr (Some "?", Square, [ expr ]) ->
+      cps expr env @@ fun arg ->
+      let value = bless_value arg in
+      Dbg (value, k @@ Value value)
+  | _ -> failwith "invalid form"
 
 (** converts a meta_value to a value *)
 and bless_value (v : meta_value) : value =
@@ -456,6 +474,13 @@ and cps_define (definitions : let_binding list) (env : env) (body : Syntax.t)
                 let value i k =
                   let k' arg : expr =
                     let arg = bless_value arg in
+                    (* TODO:
+                       fixes are incorrect,
+                       as we need to roll back the env,
+                       specifically for evaluating constants
+                       this should become an 'apply' function?
+                       or the construction should be more cognisant
+                       of this? *)
                     FixSet (i, arg, values (i - 1) k)
                   in
                   cps body env k'
@@ -577,11 +602,12 @@ let cps_module (clauses : Syntax.t list) : expr =
           in
           (env, bind))
     (* some invalid clause form *)
-    | _ -> None
+    | clause :: _ ->
+        failwith @@ "invalid module form: " ^ Syntax.syntax_to_string clause
   in
   match module_clauses clauses base_env with
   | Some (env, definitions) ->
       let env, definitions = definitions env in
       cps_define definitions env entry_point @@ fun arg ->
       Halt (bless_value arg)
-  | None -> Invalid
+  | None -> failwith "invalid module form"

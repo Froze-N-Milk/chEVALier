@@ -95,6 +95,7 @@ and expr =
   (* constructs a set of mutually recursive procedures *)
   | FixIntro of int * expr
   | FixSet of int * value * expr
+  | Dbg of value * expr
   (* unconvertible expression *)
   | Invalid
 
@@ -121,6 +122,8 @@ let rec expr_to_string (expr : expr) (tail : string list) : string list =
   | FixSet (position, value, expr) ->
       "[set-fix " :: Int.to_string position :: " "
       :: value_to_string value (" " :: expr_to_string expr ("]" :: tail))
+  | Dbg (value, expr) ->
+      "?[" :: value_to_string value (" " :: expr_to_string expr ("]" :: tail))
   | Invalid -> "invalid" :: tail
 
 and value_to_string (value : value) (tail : string list) : string list =
