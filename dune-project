@@ -20,7 +20,7 @@
  (synopsis "A short synopsis")
  (description "A longer description")
  (depends
-   (ocaml (>= 5.4))
+   (ocaml (>= 5.5))
    ocamlformat
    ocaml-lsp-server)
  (tags
