@@ -1,3 +1,4 @@
+(*
 (** types *)
 type ty =
   (* currently used to label types that must be inferred *)
@@ -17,8 +18,11 @@ type ty =
   | Constructor of int
   | Construction of ty * ty list
 
+
+  *)
+
 (** expression-embedded values *)
-and value =
+type value =
   (* debruijn indexed variable *)
   | Var of int
   | Unbound of string
@@ -31,7 +35,7 @@ and value =
 
 and proc =
   (* arbitrary expression *)
-  | Expr of ty list * expr
+  | Expr of expr
   (* builtin procedures *)
   (* halt *)
   (* halts with exit code {0} *)
@@ -83,8 +87,6 @@ and proc =
 and expr =
   (* halt with exit code *)
   | Halt of value
-  (* used in type checking *)
-  | Assert of ty * expr
   (* apply procedure to arguments *)
   | Apply of value * value list
   (* branching,
@@ -92,24 +94,18 @@ and expr =
      continuing with one of the cases,
      or the default case *)
   | Switch of value * expr list * expr
-  (* constructs a set of mutually recursive procedures *)
+  (* constructs a set of mutually recursive objects *)
   | FixIntro of int * expr
-  | FixSet of int * value * expr
-  | Dbg of value * expr
-  (* unconvertible expression *)
-  | Invalid
+  (* sets fix to value, and continues with k *)
+  | FixCons of value * value * expr
+  (* prints the values returned by expr *)
+  | Debug of Syntax.expression * value list * expr
 
 let rec expr_to_string (expr : expr) (tail : string list) : string list =
   match expr with
-  | Halt arg -> "(halt " :: value_to_string arg (")" :: tail)
-  | Assert (_, expr) -> expr_to_string expr tail
+  | Halt arg -> "halt " :: value_to_string arg tail
   | Apply (fn, args) ->
-      let rec exprs_to_string args =
-        match args with
-        | [] -> ")" :: tail
-        | arg :: args -> " " :: value_to_string arg (exprs_to_string args)
-      in
-      "(" :: value_to_string fn (exprs_to_string args)
+      "(" :: value_to_string fn (values_to_string args (")" :: tail))
   | Switch (arg, cases, default) ->
       let rec cases_to_string cases =
         match cases with
@@ -119,12 +115,14 @@ let rec expr_to_string (expr : expr) (tail : string list) : string list =
       "[switch " :: value_to_string arg (" " :: cases_to_string cases)
   | FixIntro (n, expr) ->
       "[fix " :: Int.to_string n :: " " :: expr_to_string expr ("]" :: tail)
-  | FixSet (position, value, expr) ->
-      "[set-fix " :: Int.to_string position :: " "
-      :: value_to_string value (" " :: expr_to_string expr ("]" :: tail))
-  | Dbg (value, expr) ->
-      "?[" :: value_to_string value (" " :: expr_to_string expr ("]" :: tail))
-  | Invalid -> "invalid" :: tail
+  | FixCons (fix, value, k) ->
+      "[cons! "
+      :: value_to_string fix
+           (" " :: value_to_string value (" " :: expr_to_string k ("]" :: tail)))
+  | Debug (syntax, values, expr) ->
+      "?["
+      :: Syntax.expr_to_string syntax
+      :: values_to_string values (" " :: expr_to_string expr ("]" :: tail))
 
 and value_to_string (value : value) (tail : string list) : string list =
   match value with
@@ -136,7 +134,7 @@ and value_to_string (value : value) (tail : string list) : string list =
   | Int i -> Int.to_string i :: tail
   | Real r -> Float.to_string r :: tail
   | String s -> "\"" :: s :: "\"" :: tail
-  | Procedure (Expr (_, expr)) -> "(" :: expr_to_string expr (")" :: tail)
+  | Procedure (Expr expr) -> "[fn " :: expr_to_string expr ("]" :: tail)
   | Procedure Halt -> "halt" :: tail
   | Procedure Cons -> "cons" :: tail
   | Procedure Proj -> "proj" :: tail
@@ -155,3 +153,12 @@ and value_to_string (value : value) (tail : string list) : string list =
   | Procedure Mul -> "*" :: tail
   | Procedure Div -> "/" :: tail
   | Procedure Mod -> "%" :: tail
+
+(* TODO: this adds an extra trailing space *)
+and values_to_string values tail =
+  let rec values_to_string values =
+    match values with
+    | [] -> tail
+    | arg :: args -> " " :: value_to_string arg (values_to_string args)
+  in
+  match values with [] -> tail | args -> values_to_string args

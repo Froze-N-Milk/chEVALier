@@ -131,31 +131,70 @@ end
 
 module File = struct
   type position = int64
-  type t = in_channel
+  type t = { curr : position; furthest : position; channel : in_channel }
 
   exception Mismatch of t
 
-  let next channel =
-    try Some (channel, input_char channel) with End_of_file -> None
+  let next ({ furthest; curr; channel } : t) =
+    try
+      Some
+        ( {
+            curr = Int64.add curr 1L;
+            furthest = max furthest @@ Int64.add curr 1L;
+            channel;
+          },
+          input_char channel )
+    with End_of_file -> None
 
-  let position channel = LargeFile.pos_in channel
+  let position ({ curr } : t) = curr
 
   let ( or ) a b =
-   fun channel ->
-    let pos = position channel in
-    try a channel
-    with Mismatch _ ->
-      LargeFile.seek_in channel pos;
-      b channel
+   fun input ->
+    let pos = position input in
+    try a input
+    with Mismatch input' ->
+      LargeFile.seek_in input.channel pos;
+      b { input with furthest = max input.furthest input'.furthest }
 
   (* TODO: improve to return line and column number *)
-  let to_string channel = "character " ^ Int64.to_string @@ position channel
+  let to_string ({ curr; furthest; channel } : t) =
+    let length = LargeFile.in_channel_length channel in
+    if furthest > length then raise @@ Invalid_argument "invalid position";
+    LargeFile.seek_in channel 0L;
+    let rec f lines line_start pos =
+      (* convert eof to new line *)
+      let char = if pos < length then input_char channel else '\n' in
+      match char with
+      (* eol, found target line *)
+      | '\n' when pos >= furthest ->
+          let cols = Int64.to_int @@ Int64.sub pos line_start in
+          LargeFile.seek_in channel line_start;
+          let line = In_channel.really_input_string channel cols in
+          let line =
+            match line with
+            | Some line -> line
+            | None -> failwith "Something went wrong locating invalid line"
+          in
+          let line_no = Int.to_string lines in
+          "Failed to parse input, encounted unexpected character @ (" ^ line_no
+          ^ ":" ^ Int.to_string cols ^ ")\n" ^ line ^ "\n"
+          ^ String.make (cols - 1) ' '
+          ^ "^"
+      (* eol, before target line *)
+      | '\n' -> f (lines + 1) (Int64.add pos 1L) (Int64.add pos 1L)
+      (* otherwise ignore *)
+      | _ -> f lines line_start (Int64.add pos 1L)
+    in
+    let res = f 1 0L 0L in
+    LargeFile.seek_in channel curr;
+    res
 
   type args = string
 
   let parse file parse =
-    try Ok (In_channel.with_open_bin file parse)
-    with Mismatch input -> Error (to_string input)
+    In_channel.with_open_bin file (fun channel ->
+        try Ok (parse { curr = 0L; furthest = 0L; channel })
+        with Mismatch input -> Error (to_string input))
 end
 
 module String = struct
@@ -194,8 +233,8 @@ module String = struct
           let cols = pos - line_start in
           let line = String.sub str line_start cols in
           let line_no = Int.to_string lines in
-          "Failed to parse input, encounted unexpected character @ ("
-          ^ line_no ^ ":" ^ Int.to_string cols ^ ")\n" ^ line ^ "\n"
+          "Failed to parse input, encounted unexpected character @ (" ^ line_no
+          ^ ":" ^ Int.to_string cols ^ ")\n" ^ line ^ "\n"
           ^ String.make (cols - 1) ' '
           ^ "^"
       (* eol, before target line *)

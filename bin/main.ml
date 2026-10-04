@@ -10,7 +10,16 @@ let anon_fun filename =
       file := Some filename;
       ()
 
-let () = Arg.parse [] anon_fun usage
+let debug = ref false
+let compiled = ref false
+
+let speclist =
+  [
+    ("-d", Arg.Set debug, "Output call trace debugging information.");
+    ("-c", Arg.Set compiled, "Emit a .chEVAL CPS IR file.");
+  ]
+
+let () = Arg.parse speclist anon_fun usage
 
 type expression = Syntax.expression
 
@@ -38,15 +47,16 @@ let cps_file =
   | None -> failwith "chEVALier expects a single file argument"
 
 let () =
-  Out_channel.with_open_bin cps_file @@ fun channel ->
-  let rec write_all strs =
-    match strs with
-    | [] -> ()
-    | str :: strs ->
-        Out_channel.output_string channel str;
-        write_all strs
-  in
-  let strs = ChEVALier.Language.expr_to_string converted [] in
-  write_all strs
+  if !compiled then
+    Out_channel.with_open_bin cps_file @@ fun channel ->
+    let rec write_all strs =
+      match strs with
+      | [] -> ()
+      | str :: strs ->
+          Out_channel.output_string channel str;
+          write_all strs
+    in
+    let strs = ChEVALier.Language.expr_to_string converted [] in
+    write_all strs
 
-let obj = ChEVALier.Eval.eval_expr [] converted
+let obj = ChEVALier.Eval.eval_expr (!debug) [] converted
