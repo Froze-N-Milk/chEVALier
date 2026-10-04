@@ -36,4 +36,4 @@ setup.log
 _opam/
 
 # compiled EVAL files
-.chEVAL
+*.chEVAL
