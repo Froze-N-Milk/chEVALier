@@ -156,7 +156,6 @@ module File = struct
       LargeFile.seek_in input.channel pos;
       b { input with furthest = max input.furthest input'.furthest }
 
-  (* TODO: improve to return line and column number *)
   let to_string ({ curr; furthest; channel } : t) =
     let length = LargeFile.in_channel_length channel in
     if furthest > length then raise @@ Invalid_argument "invalid position";

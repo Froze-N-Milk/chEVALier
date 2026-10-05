@@ -408,26 +408,8 @@ and abstract_define (definitions : let_binding list) (env : env) (shift : int)
     match vs with
     | [] -> k n' shift
     | v :: vs ->
-        (*
-        f v shift
-        @@ Abstract
-             (fun shift args ->
-               match args with
-               | [ value ] ->
-                   let value = bless_value shift value in
-                   let k = fold_k' f vs k (n' + 1) shift in
-                   FixCons (Var (shift - n), value, k)
-               | _ -> failwith "internal compiler error")
-               *)
         let v =
           f v shift
-          (*
-          @@ Value
-               (Procedure
-                  (Expr
-                     (Apply
-                        (Var (-shift), [ Var (-shift - 1); Var (-shift - 2) ]))))
-                        *)
           @@ Abstract
                (fun shift' args ->
                  Apply
