@@ -4,6 +4,6 @@ You will need [opam](https://opam.ocaml.org/)
 
 then run:
 
-`opam install .`
+`opam switch create .`
 
 and you will be able to run `EVAL demo.EVAL`
