@@ -170,12 +170,12 @@ The `(%)` function takes two arguments and returns the first mod the second.
 
 ## Notes
 
-There are plenty of functions missing from the builtins, String concatentation,
+There are plenty of functions missing from the builtins, String concatenation,
 int and float conversion, strint conversions for all data types. Adding all
 necessary builtins did seem the most pertinent part of the project to me.
 
 `EVAL` can be invoked with the `-d` flag to enable tracing, which prints out the
-function and evironment at each evaluation step in the program, allowing you to
+function and environment at each evaluation step in the program, allowing you to
 trace where something went wrong, or the changes in memory as the program is
 evaluated.
 
@@ -215,13 +215,13 @@ I did not consult any particular resources on how to do parsing.
 Inspired by [1] and [2] I wanted to convert my source program to Continuation
 Passing Style (CPS). Which is a superset of the popular Static Single Assignment
 (SSA) or Administrative Normal Form (A-Normal form). CPS is better suited to
-compilation to machine code, or futher analysis and optimisation, which I did
+compilation to machine code, or further analysis and optimisation, which I did
 not get the time to do in this project.
 
 I followed the 'smart' algorithm described in [2] with a few major
 modifications. The 'smart' algorithm described in [2] is a single pass Direct
 Style (DS) to CPS transformation that aims to eliminate a lot of administrative
-redexes produced by prexisting transformation algorithms, that would then need
+redexes produced by preexisting transformation algorithms, that would then need
 to be removed with later optimisation passes.
 
 Direct style is the normal style that we write programs in, with functions that
@@ -250,16 +250,16 @@ Secondly, I re-functionalised the structures they constructed, so that the would
 be meta-continuations, which allowed for me to introduce new constructs for
 emitting the `[define]` forms.
 
-# DeBruijn Indicies
+# DeBruijn Indices
 
-My final addition was to convert all symbols to numeric DeBruijn indicies. This
+My final addition was to convert all symbols to numeric DeBruijn indices. This
 decision was likely a mistake, as it did not interact well with the already
 complex to follow 'smart' CPS transform algorithm.
 
-DeBruijn indicies make it easier for computers to reason about programs by
+DeBruijn indices make it easier for computers to reason about programs by
 removing the need to handle symbols and binders in complex ways, instead, each
 binder (function) adds a new variable 0, and pushes all other bound variables up
-by one, so that the index is the addess of the binder that introduces the
+by one, so that the index is the address of the binder that introduces the
 variable.
 
 This makes it easier to do both alpha and beta reductions on the program, and to
@@ -268,8 +268,56 @@ indices (λ.λ.0) and (λ.λ.0), they are clearly equal, and this is easy for a
 computer to reason about.
 
 The complexity of both doing a CPS transformation and also renaming all symbols
-to DeBruijn indicies meant that I vastly overshot the due date of the
+to DeBruijn indices meant that I vastly overshot the due date of the
 assessment.
+
+# What I Learnt
+
+This was really hard! I suppose my biggest lesson would be to pick a less
+ambitious project so I don't submit really late.
+
+I found it very very hard to reason about the interactions between different
+parts of the transformation. I spent ~95 hours on this project all up over the
+last two weeks according to WakaTime. The vast majority of this was spent on the
+conversion / transform algorithm. In particular it took me a very long time to
+figure out that I needed the ability to shift generated 'concrete' expressions
+after they had been emitted in order to appropriately pass them under binders
+later. This probably wasted ~20 hours alone.
+
+I'd spend a long time looking at the generated / executed program, seeing what
+was incorrect about it, then trying a million little things to try to nudge it
+to behave correctly, which was probably the wrong way to go about this! Often
+I'd finish a whole day of tweaking feeling like I'd gone 10 steps forward, 20
+steps backward.
+
+In order to help me analyse the program I added the ability to spit out the
+final converted script as a .chEVAL file, and when those became hard to read I
+added started tracing the function calls in the evaluation logic, which made
+analysing the evaluation steps much easier to understand. Both of these
+features have been left in as I feel they're fairly well done, and do much
+illumination on what's going on under the hood.
+
+Trying DeBruijn indices and adding the mutually recursive `[define]` form was a
+bad idea, it was often very difficult to tell what was going on and how the
+program would unfold because of the strange times when the closures would be
+captured.
+
+In the future I'd like to try A-Normal Form, as having worked with CPS I find it
+hard to believe it would be particularly ameanable to compiling to a modern ISA.
+Although that sounds like a fun challenge in itself.
+
+I'd also like to try different ways of removing names from source code. In
+particular I'd like to try encoding all bindings as 'meta' functions, which
+would take a 'name' as a parameter and produce the concrete target language
+expression with that name. This idea sounds like it would be easier to work with
+and make it easier to later fill in those blanks with De Bruijn indices /
+levels, allowing for the same advantages without requiring so much shifting of
+already emitted concrete target language expressions.
+
+# AI Use
+
+I did not use any AI tools in any part of the making of this programming
+language.
 
 # References
 
