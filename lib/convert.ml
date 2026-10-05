@@ -111,7 +111,7 @@ let resolve (env : env) (shift : int) (sym : string) : value =
         | Some i, _ -> Int i
         | _, Some r -> Real r
         | _ -> Unbound sym)
-    | Binding (Some sym') :: _ when sym = sym' -> Var bindings
+    | Binding (Some sym') :: _ when sym = sym' -> Var (bindings - shift)
     | Binding _ :: env -> lookup env (bindings + 1)
     | Const (sym', value) :: _ when sym = sym' ->
         let value = CPS.shift_value (bindings - shift) value in
@@ -243,13 +243,14 @@ and bless_value (shift : int) (v : meta_value) : value =
          function `fn`
          which looks like Apply (fn, [ ...; 3; 2; 1; 0; ]) *)
       let (nformals : value list) =
-        Var n :: List.mapi (fun i _ -> (Var (n - i - 1) : value)) formals
+        Var n
+        :: List.mapi (fun i _ -> (Var (n - i - 1 - shift) : value)) formals
       in
       let expr =
         (* close the body *)
         cps body env shift
         (* continue by calling the passed continuation, bound to n *)
-        @@ Value (Var n)
+        @@ Value (Var (n - shift))
       in
       match expr with
       (* if we just apply the args in order, n-reduce to fn *)
@@ -393,7 +394,7 @@ and abstract_define (definitions : let_binding list) (env : env) (shift : int)
   in
   let values, procs = partition_defs definitions in
   let n = List.length definitions in
-  (* bind return address *)
+  (* bind fix return address *)
   let env = bind_var env None in
   (* bind procs in env *)
   let env =
@@ -403,35 +404,62 @@ and abstract_define (definitions : let_binding list) (env : env) (shift : int)
   let env =
     List.fold_left (fun env (sym, _) -> bind_var env @@ Some sym) env values
   in
-  let rec fold_k' f vs k n shift =
+  let rec fold_k' f vs k n' shift =
     match vs with
-    | [] -> k n shift
+    | [] -> k n' shift
     | v :: vs ->
+        (*
         f v shift
         @@ Abstract
              (fun shift args ->
                match args with
                | [ value ] ->
                    let value = bless_value shift value in
-                   let k = fold_k' f vs k (n + 1) shift in
+                   let k = fold_k' f vs k (n' + 1) shift in
                    FixCons (Var (shift - n), value, k)
                | _ -> failwith "internal compiler error")
+               *)
+        let v =
+          f v shift
+          (*
+          @@ Value
+               (Procedure
+                  (Expr
+                     (Apply
+                        (Var (-shift), [ Var (-shift - 1); Var (-shift - 2) ]))))
+                        *)
+          @@ Abstract
+               (fun shift' args ->
+                 Apply
+                   ( Var (shift' - shift + 1),
+                     Var (shift' - shift) :: List.map (bless_value shift') args
+                   ))
+        in
+        let k = fold_k' f vs k (n' - 1) shift in
+        let (fixcons : expr) = FixCons (Var n', Var 0, Apply (Var 1, [])) in
+        (Apply
+           (Procedure (Expr v), [ Procedure (Expr fixcons); Procedure (Expr k) ])
+          : expr)
   in
+
+  (* bind cons return addresses *)
+  let env' = bind_var env None in
+  let env' = bind_var env' None in
   let values_k =
     fold_k'
-      (fun (_, value_syn) shift k -> cps value_syn env shift k)
+      (fun (_, value_syn) shift k -> cps value_syn env' shift k)
       values
       (fun _ shift' ->
         cps body env shift'
-        @@ Value (Var (n)))
+        @@ Abstract
+             (fun shift'' args ->
+               Apply (Var (shift'' - shift), List.map (bless_value shift'') args)))
   in
   let proc_k =
     fold_k'
       (fun (_, formals, body) shift k ->
-        cps_apply k shift @@ [ Closure { formals; env; body } ])
-      procs values_k
-      (shift - n + 1)
-      shift
+        cps_apply k shift @@ [ Closure { formals; env = env'; body } ])
+      procs values_k (n + 1) (shift + n)
   in
   Apply (Procedure (Expr (FixIntro (n, proc_k))), [ bless_expr shift k ])
 
