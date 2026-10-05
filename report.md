@@ -1,6 +1,8 @@
 # chEVALier
 
-chEVAlier is a wip pure functional programming language.
+chEVAlier is a lispish pure functional programming language.
+
+[video walkthrough](https://youtu.be/Wr0nr00k_jo)
 
 Once installed, you can invoke it on a .EVAL file, which follows the following
 grammar:
